@@ -18,14 +18,16 @@ use colored::Colorize;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
+use which::Path;
 use std::{fmt::Display, fs, path::PathBuf, sync::Arc, time::Instant, hash::Hasher};
 use uuid::Uuid;
-use std::hash::Hash;
+use sha2::{Sha256, Digest};
 use std::collections::hash_map::DefaultHasher;
 use std::io::{BufReader, Read, Write};
 
-use sha2::{Sha256, Digest};
-use std::{io, fs};
+// use sha2::{Sha256, Digest};
+use std::{io};
+use std::collections::HashMap;
 
 
 use super::{
@@ -119,13 +121,17 @@ fn list_cairo_files(root: &PathBuf) -> Result<Vec<PathBuf>, String> {
 	.map(|cmd_output: ListOutput| cmd_output.files)
 }
 
-fn hash(filepath: PathBuf) -> &str{
+
+
+fn hash(filepath: PathBuf) -> Result<String, ()>{
 	let mut hasher = Sha256::new();
-	let mut file = fs::File::open(filepath)?;
-	let bytes_written = io::copy(&mut file, &mut hasher)?;
-	let hash_bytes = hasher.finalize();
-	let hex_hash = base16ct::lower::encode_string(&hash_bytes);
-	return hex_hash
+	let mut file = fs::File::open(filepath).unwrap();
+	let bytes_written = io::copy(&mut file, &mut hasher);
+	let mut hash_bytes = hasher.finalize();
+	let mut hash_result: &mut [u8];
+	let hex_hash = String::from_utf8(hash_bytes).expect("Found invalid UTF-8");
+	// let hex_hash = base16ct::lower::encode_str(&hash_bytes, hash_result);
+	return Ok(hex_hash);
 }
 
 
@@ -143,14 +149,20 @@ fn read_cache(list_of_cairo_files: Vec<PathBuf>, cache_path: PathBuf) -> Result<
 				.map_err(|err| format!("Cache output is not a valid JSON {}", err))?;
 			for (filepath, filehash) in json.as_object().unwrap() {
 				let mut hasher = DefaultHasher::new();
-				let current_hash = hash(filepath);
-				let filehash = filehash.as_str()?;
-				if current_hash == filehash {
-					cache.push(filepath);
-				} 
+				let current_hash = hash(PathBuf::from(filepath));
+				let filehash = filehash.to_owned().to_string();
+				match current_hash {
+					Ok(current_hash) => {
+						if current_hash == filehash {
+							cache.push(PathBuf::from(filepath));
+						}
+					},
+					Err(_) => eprintln!("Could not hash file"),
+				}
+				
 				// TODO: match different hashes and push it into the hash map, then serialize it
 			}
-		return cache
+		return Ok(cache)
 		}
 		Err(_) => {
 			// create cache file
@@ -158,12 +170,13 @@ fn read_cache(list_of_cairo_files: Vec<PathBuf>, cache_path: PathBuf) -> Result<
 			for file in list_of_cairo_files {
 				let hash = hash(file);
 				let mut entry = HashMap::new();
+				let mut entry = HashMap::new();
 				entry.insert(file, hash);
 				cache.push(entry);
 			}
 			let json = serde_json::to_string(&cache)?;
 			file.write_all(json.as_bytes())?;
-			return cache
+			return Ok(cache)
 		}
 	}
 

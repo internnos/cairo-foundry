@@ -28,3 +28,4 @@ uuid = { version = "1.2.1", features = ["v4"] }
 walkdir = "2.3.2"
 which = "4.3.0"
 base16ct = "0.1.1"
+sha = "0.10.6"
