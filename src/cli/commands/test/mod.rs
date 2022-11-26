@@ -18,8 +18,15 @@ use colored::Colorize;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use std::{fmt::Display, fs, path::PathBuf, sync::Arc, time::Instant};
+use std::{fmt::Display, fs, path::PathBuf, sync::Arc, time::Instant, hash::Hasher};
 use uuid::Uuid;
+use std::hash::Hash;
+use std::collections::hash_map::DefaultHasher;
+use std::io::{BufReader, Read, Write};
+
+use sha2::{Sha256, Digest};
+use std::{io, fs};
+
 
 use super::{
 	list::{path_is_valid_directory, ListArgs, ListOutput},
@@ -110,6 +117,56 @@ fn list_cairo_files(root: &PathBuf) -> Result<Vec<PathBuf>, String> {
 	}
 	.exec()
 	.map(|cmd_output: ListOutput| cmd_output.files)
+}
+
+fn hash(filepath: PathBuf) -> &str{
+	let mut hasher = Sha256::new();
+	let mut file = fs::File::open(filepath)?;
+	let bytes_written = io::copy(&mut file, &mut hasher)?;
+	let hash_bytes = hasher.finalize();
+	let hex_hash = base16ct::lower::encode_string(&hash_bytes);
+	return hex_hash
+}
+
+
+
+// read cache file which contains the filename and its hash 
+fn read_cache(list_of_cairo_files: Vec<PathBuf>, cache_path: PathBuf) -> Result<Vec<PathBuf>, String> {
+	// read cache_path, create one if it doesnt exist
+	let mut cache = Vec::new();
+
+	let cache_data = fs::read_to_string(cache_path);
+	match cache_data {
+		Ok(cache_data) => {
+			
+			let json = serde_json::from_str::<Value>(&cache_data)
+				.map_err(|err| format!("Cache output is not a valid JSON {}", err))?;
+			for (filepath, filehash) in json.as_object().unwrap() {
+				let mut hasher = DefaultHasher::new();
+				let current_hash = hash(filepath);
+				let filehash = filehash.as_str()?;
+				if current_hash == filehash {
+					cache.push(filepath);
+				} 
+				// TODO: match different hashes and push it into the hash map, then serialize it
+			}
+		return cache
+		}
+		Err(_) => {
+			// create cache file
+			let mut file = fs::File::create(cache_path)?;
+			for file in list_of_cairo_files {
+				let hash = hash(file);
+				let mut entry = HashMap::new();
+				entry.insert(file, hash);
+				cache.push(entry);
+			}
+			let json = serde_json::to_string(&cache)?;
+			file.write_all(json.as_bytes())?;
+			return cache
+		}
+	}
+
 }
 
 fn compile_and_list_entrypoints(path_to_code: PathBuf) -> Option<(PathBuf, PathBuf, Vec<String>)> {
@@ -253,6 +310,8 @@ fn run_tests_for_one_file(
 		success: tests_success,
 	}
 }
+
+
 
 impl CommandExecution<TestOutput> for TestArgs {
 	fn exec(&self) -> Result<TestOutput, String> {
